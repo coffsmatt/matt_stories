@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <style>
+    :root { --green:#24533f; --cream:#fbf7ee; --ink:#12251d; --warn:#a63d21; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:var(--cream); color:var(--ink); font-family:Georgia, serif; }
+    main { max-width:680px; margin:0 auto; padding:28px 22px 40px; }
+    h1 { color:var(--green); font-size:clamp(2.25rem,8vw,4rem); letter-spacing:.035em; margin:0 0 18px; }
+    .instruction { font:1.2rem/1.45 system-ui,sans-serif; margin:0 0 28px; }
+    .card { background:white; border:1px solid #d8d0c2; border-radius:18px; padding:26px 24px; box-shadow:0 3px 10px #0000000b; }
+    h2 { color:var(--green); font-size:1.55rem; margin:0 0 30px; }
+    #timer { font:700 clamp(3.5rem,16vw,6.5rem)/1 ui-monospace,Consolas,monospace; text-align:center; color:var(--green); letter-spacing:-.08em; }
+    #limit { text-align:center; font:1rem system-ui,sans-serif; margin:18px 0 29px; }
+    button { width:100%; min-height:76px; border:0; border-radius:12px; background:var(--green); color:white; font:700 1.28rem system-ui,sans-serif; cursor:pointer; }
+    button:disabled { opacity:.55; cursor:wait; }
+    #status { min-height:2em; margin:23px 0 0; font:1.08rem/1.4 system-ui,sans-serif; }
+    .warning #timer, .warning #limit { color:var(--warn); animation:flash 1s step-end infinite; }
+    @keyframes flash { 50% { opacity:.25; } }
+    @media (prefers-reduced-motion:reduce) { .warning #timer, .warning #limit { animation:none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>MATT'S STORIES</h1>
+    <p class="instruction">Press Start, tell your story, then press Stop.</p>
+    <section class="card" id="card">
+      <h2>Record your story</h2>
+      <div id="timer" aria-live="polite">00:00</div>
+      <p id="limit">Up to 20 minutes.</p>
+      <button id="recordButton" type="button">Start recording</button>
+      <p id="status" role="status">Ready when you are.</p>
+    </section>
+  </main>
+  <script>
+    let recorder, stream, startedAt, clock, maxStop, chunks = [];
+    let maxSeconds = 1200;
+    const button = document.getElementById('recordButton');
+    const timer = document.getElementById('timer');
+    const status = document.getElementById('status');
+    const card = document.getElementById('card');
+    const pad = n => String(n).padStart(2, '0');
+    const elapsed = () => startedAt ? Math.min(maxSeconds, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    function showTime(seconds) { timer.textContent = `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)}`; }
+    function tick() { const s = elapsed(); showTime(s); card.classList.toggle('warning', s >= maxSeconds - 60); }
+    function filename() { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}.${pad(d.getMinutes())}.${pad(d.getSeconds())} - Matt's Story.webm`; }
+    function fail(message) { status.textContent = message; button.disabled = false; button.textContent = 'Start recording'; card.classList.remove('warning'); }
+    async function start() {
+      if (!navigator.mediaDevices || !window.MediaRecorder) return fail('This browser cannot record audio. Please use Chrome or Safari.');
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+        const preferred = ['audio/webm;codecs=opus', 'audio/webm'];
+        const mimeType = preferred.find(MediaRecorder.isTypeSupported) || '';
+        recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 });
+        chunks = []; recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+        recorder.onstop = upload;
+        startedAt = Date.now(); recorder.start(); tick(); clock = setInterval(tick, 250);
+        maxStop = setTimeout(() => stop(true), maxSeconds * 1000);
+        button.textContent = 'Stop recording'; status.textContent = 'Recording…';
+      } catch (e) { fail('Microphone access is needed. Please allow it, then try again.'); }
+    }
+    function stop(automatic) {
+      if (!recorder || recorder.state === 'inactive') return;
+      clearInterval(clock); clearTimeout(maxStop); showTime(automatic ? maxSeconds : elapsed());
+      button.disabled = true; button.textContent = 'Saving…'; card.classList.remove('warning');
+      status.textContent = automatic ? '20 minutes reached. Saving your story…' : 'Saving your story…';
+      recorder.stop(); stream.getTracks().forEach(track => track.stop());
+    }
+    function upload() {
+      const mimeType = recorder.mimeType || 'audio/webm';
+      const durationSeconds = elapsed();
+      const reader = new FileReader();
+      reader.onloadend = () => google.script.run.withSuccessHandler(result => {
+        status.innerHTML = `Saved: <a href="${result.fileUrl}" target="_blank" rel="noopener">${result.filename}</a>`;
+        button.disabled = false; button.textContent = 'Start recording'; recorder = null; startedAt = null;
+      }).withFailureHandler(err => fail(`Could not save: ${err.message || err}`))
+        .saveRecording({ dataUrl:reader.result, filename:filename(), durationSeconds, mimeType });
+      reader.readAsDataURL(new Blob(chunks, { type:mimeType }));
+    }
+    button.addEventListener('click', () => recorder && recorder.state === 'recording' ? stop(false) : start());
+    google.script.run.withSuccessHandler(config => { maxSeconds = config.maxSeconds; document.title = config.title; }).getAppConfig();
+  </script>
+</body>
+</html>
